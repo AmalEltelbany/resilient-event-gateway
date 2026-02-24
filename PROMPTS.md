@@ -137,3 +137,19 @@ process() throws → BullMQ retries (exponential backoff, up to 3 attempts)
   - Exposes port 3000, joins `reg_network`
 
 ---
+
+### Task 9 — Redis Idempotency Check in EventsService
+**Prompt:** In `EventsService.create()`, before saving to MongoDB, add a Redis idempotency check.
+**Result:**
+- Created `src/common/redis/redis.provider.ts` — `REDIS_CLIENT` injection token + `RedisProvider` factory (builds `ioredis` `Redis` instance from `ConfigService`)
+- Created `src/common/redis/redis.module.ts` — `@Global()` module exporting `REDIS_CLIENT` so any module can inject without re-importing
+- Registered `RedisModule` in `AppModule`
+- Updated `EventsService.create()`:
+  - Injects `@Inject(REDIS_CLIENT) redis: Redis`
+  - Before any DB or queue call: `redis.set('idempotency:event:<eventId>', '1', 'EX', 86400, 'NX')`
+  - `SET NX EX` is atomic — returns `'OK'` on first call, `null` on duplicate
+  - On `null`: logs warning, throws `ConflictException` (HTTP 409) — no MongoDB write, no queue enqueue
+  - TTL is 24 h (covers max retry window); constant `IDEMPOTENCY_PREFIX` for key namespacing
+- Build passes cleanly
+
+---

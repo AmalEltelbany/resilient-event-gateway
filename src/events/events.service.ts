@@ -1,11 +1,17 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
+import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
+import { Redis } from 'ioredis';
 import { Model } from 'mongoose';
+import { REDIS_CLIENT } from '../common/redis/redis.provider.js';
 import { EVENT_QUEUE } from '../queues/queue.constants.js';
 import { CreateEventDto } from './dto/create-event.dto.js';
 import { Event, EventDocument, EventStatus } from './schemas/event.schema.js';
+
+// Idempotency key TTL: must exceed max total retry duration (attempts × backoff)
+const IDEMPOTENCY_TTL_S = 86_400; // 24 h
+const IDEMPOTENCY_PREFIX = 'idempotency:event:';
 
 @Injectable()
 export class EventsService {
@@ -14,9 +20,18 @@ export class EventsService {
   constructor(
     @InjectModel(Event.name) private readonly eventModel: Model<EventDocument>,
     @InjectQueue(EVENT_QUEUE) private readonly eventQueue: Queue,
+    @Inject(REDIS_CLIENT) private readonly redis: Redis,
   ) {}
 
   async create(dto: CreateEventDto): Promise<{ status: string; eventId: string }> {
+    // Atomic SET NX EX — 'OK' on first receipt, null on duplicate
+    const key = `${IDEMPOTENCY_PREFIX}${dto.eventId}`;
+    const acquired = await this.redis.set(key, '1', 'EX', IDEMPOTENCY_TTL_S, 'NX');
+    if (acquired === null) {
+      this.logger.warn(`Duplicate event rejected: ${dto.eventId}`);
+      throw new ConflictException(`Event ${dto.eventId} has already been received`);
+    }
+
     const event = await this.eventModel.create({
       eventId: dto.eventId,
       type: dto.type,
