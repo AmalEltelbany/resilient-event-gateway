@@ -80,3 +80,60 @@ Updated after each completed task.
 - Build passes cleanly
 
 ---
+
+### Task 6 — Event Processor Implementation
+**Prompt:** Implement `EventProcessor` with concurrency 10. Add `RoutingService` (2s delay, 20% random failure). In `process()`: skip if already completed, update status to `processing`, fetch shipment via `ShipmentsService`, call routing service, on success update status to `completed` and set `processedAt`.
+**Result:**
+- Created `src/events/routing.service.ts` — `RoutingService` with `route(shipment, eventType)`: 2 s `setTimeout` delay, then `Math.random() < 0.2` throws `Error` (20% failure rate), otherwise logs success
+- Replaced `src/events/processors/event.processor.ts` with full implementation:
+  - `@Processor(EVENT_QUEUE, { concurrency: 10 })` — 10 parallel workers
+  - Injects `EventModel`, `ShipmentsService`, `RoutingService`
+  - Step 1: idempotency guard — `findOne({ eventId })`, return early if `status === COMPLETED`
+  - Step 2: `$set { status: PROCESSING }` + `$inc { attempts: 1 }`
+  - Step 3: `shipmentsService.findByShipmentId(payload.shipmentId)`
+  - Step 4: `routingService.route(shipment, job.name)` — throws on failure, BullMQ retries with exponential backoff
+  - Step 5: `$set { status: COMPLETED, processedAt: new Date(), errorMessage: null }`
+- Updated `EventsModule`: imported `ShipmentsModule`, added `RoutingService` to providers
+- Build passes cleanly
+
+---
+
+### Task 7 — Dead Letter Queue (DLQ)
+**Prompt:** Add DLQ support to the event processor.
+**Result:**
+- Added `EVENT_DLQ = 'events:dlq'` constant to `src/queues/queue.constants.ts`
+- Added `@OnWorkerEvent('failed')` handler to `EventProcessor`:
+  - Returns early if `job.attemptsMade < maxAttempts` (still has retries)
+  - When all retries exhausted: enqueues job data + `{ originalJobId, failedReason }` onto `EVENT_DLQ` with stable `jobId: dlq:<id>`
+  - Injects `@InjectQueue(EVENT_DLQ)` into the processor
+- Created `src/events/processors/dlq.processor.ts` — `DlqProcessor`:
+  - `@Processor(EVENT_DLQ, { concurrency: 5 })`
+  - Reads `{ eventId, failedReason, originalJobId }` from job data
+  - Sets MongoDB document `status = dead_lettered`, `errorMessage = failedReason`
+- Updated `EventsModule`: registered `BullModule.registerQueue({ name: EVENT_DLQ })`, added `DlqProcessor` to providers
+- Build passes cleanly
+
+**Flow:**
+```
+process() throws → BullMQ retries (exponential backoff, up to 3 attempts)
+  → all attempts exhausted → onFailed() fires
+    → job moved to events-dlq
+      → DlqProcessor.process() → MongoDB status = dead_lettered
+```
+
+---
+
+### Task 8 — Dockerfile + Docker Compose App Service
+**Prompt:** Add a Dockerfile and wire the app as a service in docker-compose. Multi-stage build. In docker-compose add app service depending on mongodb and redis.
+**Result:**
+- Created `Dockerfile` with two stages:
+  - `builder`: `node:22-alpine`, `npm ci`, `npm run build` → produces `dist/`
+  - `production`: `node:22-alpine`, `npm ci --omit=dev`, copies `dist/` from builder, `CMD ["node", "dist/main"]`
+- Created `.dockerignore` — excludes `node_modules`, `dist`, `.env`, `.git`
+- Updated `docker-compose.yml` — added `app` service:
+  - Builds from local Dockerfile
+  - `env_file: .env` + overrides `MONGO_URI` and `REDIS_HOST` to use container hostnames (`mongodb`, `redis`)
+  - `depends_on: mongodb, redis`
+  - Exposes port 3000, joins `reg_network`
+
+---

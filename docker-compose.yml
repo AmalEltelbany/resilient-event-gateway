@@ -1,4 +1,23 @@
 services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: reg_app
+    restart: unless-stopped
+    ports:
+      - '${PORT:-3000}:3000'
+    env_file:
+      - .env
+    environment:
+      MONGO_URI: mongodb://${MONGO_ROOT_USER:-root}:${MONGO_ROOT_PASSWORD:-secret}@mongodb:27017/${MONGO_DB:-resilient-event-gateway}?authSource=admin
+      REDIS_HOST: redis
+    depends_on:
+      - mongodb
+      - redis
+    networks:
+      - reg_network
+
   mongodb:
     image: mongo:7
     container_name: reg_mongodb
