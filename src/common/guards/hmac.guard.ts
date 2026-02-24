@@ -15,11 +15,7 @@ export class HmacGuard implements CanActivate {
   private readonly secret: string;
 
   constructor(private readonly config: ConfigService) {
-    const secret = this.config.get<string>('webhook.secret');
-    if (!secret) {
-      throw new Error('WEBHOOK_SECRET is not configured');
-    }
-    this.secret = secret;
+    this.secret = this.config.get<string>('webhook.secret')!;
   }
 
   canActivate(context: ExecutionContext): boolean {

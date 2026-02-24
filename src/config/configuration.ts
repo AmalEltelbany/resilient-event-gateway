@@ -1,4 +1,9 @@
-export default () => ({
+export default () => {
+  if (!process.env.WEBHOOK_SECRET) {
+    throw new Error('Missing required environment variable: WEBHOOK_SECRET');
+  }
+
+  return {
   port: parseInt(process.env.PORT ?? '3000', 10),
   webhook: {
     secret: process.env.WEBHOOK_SECRET,
@@ -16,4 +21,5 @@ export default () => ({
     defaultJobAttempts: parseInt(process.env.QUEUE_JOB_ATTEMPTS ?? '3', 10),
     defaultBackoffDelay: parseInt(process.env.QUEUE_BACKOFF_DELAY_MS ?? '3000', 10),
   },
-});
+  };
+};
