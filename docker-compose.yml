@@ -1,0 +1,54 @@
+services:
+  mongodb:
+    image: mongo:7
+    container_name: reg_mongodb
+    restart: unless-stopped
+    ports:
+      - '${MONGO_PORT:-27017}:27017'
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-secret}
+      MONGO_INITDB_DATABASE: ${MONGO_DB:-resilient-event-gateway}
+    volumes:
+      - mongo_data:/data/db
+    networks:
+      - reg_network
+
+  redis:
+    image: redis:7-alpine
+    container_name: reg_redis
+    restart: unless-stopped
+    ports:
+      - '${REDIS_PORT:-6379}:6379'
+    command: >
+      redis-server
+      --requirepass ${REDIS_PASSWORD:-redispassword}
+      --appendonly yes
+    volumes:
+      - redis_data:/data
+    networks:
+      - reg_network
+
+  # Optional: Redis GUI
+  redis-commander:
+    image: rediscommander/redis-commander:latest
+    container_name: reg_redis_commander
+    restart: unless-stopped
+    ports:
+      - '8081:8081'
+    environment:
+      REDIS_HOSTS: 'local:redis:6379:0:${REDIS_PASSWORD:-redispassword}'
+    depends_on:
+      - redis
+    networks:
+      - reg_network
+    profiles:
+      - tools
+
+volumes:
+  mongo_data:
+  redis_data:
+
+networks:
+  reg_network:
+    driver: bridge

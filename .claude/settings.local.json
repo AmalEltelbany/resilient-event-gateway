@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(npm install @nestjs/mongoose mongoose @nestjs/bullmq bullmq ioredis @nestjs/config)",
+      "Bash(npm run build)",
+      "Bash(docker compose up -d)",
+      "Bash(npm install class-validator class-transformer)"
+    ]
+  }
+}
