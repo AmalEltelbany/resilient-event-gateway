@@ -50,13 +50,14 @@ export class EventProcessor extends WorkerHost {
 
   @OnWorkerEvent('failed')
   async onFailed(job: Job, error: Error): Promise<void> {
+    const { eventId } = job.data as { eventId: string };
     const maxAttempts = job.opts.attempts ?? 1;
+
     if (job.attemptsMade < maxAttempts) {
-      // Still has retries remaining — BullMQ will reschedule
+      // Still has retries remaining — mark failed, BullMQ will reschedule
+      await this.eventsService.updateStatus(eventId, EventStatus.FAILED, { errorMessage: error.message });
       return;
     }
-
-    const { eventId } = job.data as { eventId: string };
     this.logger.error(
       `Job ${job.id} (${eventId}) exhausted ${job.attemptsMade} attempts — moving to DLQ`,
       error.stack,

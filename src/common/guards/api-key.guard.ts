@@ -1,5 +1,6 @@
 import { CanActivate, ExecutionContext, Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { timingSafeEqual } from 'crypto';
 import { Request } from 'express';
 
 @Injectable()
@@ -13,8 +14,14 @@ export class ApiKeyGuard implements CanActivate {
   canActivate(context: ExecutionContext): boolean {
     const req = context.switchToHttp().getRequest<Request>();
     const key = req.headers['x-api-key'] as string | undefined;
-    if (!key || key !== this.apiKey) {
-      throw new UnauthorizedException('Invalid or missing API key');
+    if (!key) {
+      throw new UnauthorizedException('Missing API key');
+    }
+
+    const incoming = Buffer.from(key, 'utf8');
+    const expected = Buffer.from(this.apiKey, 'utf8');
+    if (incoming.length !== expected.length || !timingSafeEqual(incoming, expected)) {
+      throw new UnauthorizedException('Invalid API key');
     }
     return true;
   }
