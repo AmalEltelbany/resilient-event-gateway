@@ -2,9 +2,13 @@ export default () => {
   if (!process.env.WEBHOOK_SECRET) {
     throw new Error('Missing required environment variable: WEBHOOK_SECRET');
   }
+  if (!process.env.API_KEY) {
+    throw new Error('Missing required environment variable: API_KEY');
+  }
 
   return {
   port: parseInt(process.env.PORT ?? '3000', 10),
+  apiKey: process.env.API_KEY,
   webhook: {
     secret: process.env.WEBHOOK_SECRET,
   },

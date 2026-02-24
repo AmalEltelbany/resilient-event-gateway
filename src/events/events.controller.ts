@@ -1,5 +1,6 @@
 import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
 import { HmacGuard } from '../common/guards/hmac.guard.js';
+import { ApiKeyGuard } from '../common/guards/api-key.guard.js';
 import { CreateEventDto } from './dto/create-event.dto.js';
 import { EventsService } from './events.service.js';
 
@@ -15,11 +16,13 @@ export class EventsController {
   }
 
   @Get()
+  @UseGuards(ApiKeyGuard)
   findAll() {
     return this.eventsService.findAll();
   }
 
   @Get(':id')
+  @UseGuards(ApiKeyGuard)
   findOne(@Param('id') id: string) {
     return this.eventsService.findOne(id);
   }

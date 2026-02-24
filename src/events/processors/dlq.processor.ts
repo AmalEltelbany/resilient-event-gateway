@@ -18,14 +18,15 @@ export class DlqProcessor extends WorkerHost {
   }
 
   async process(job: Job): Promise<void> {
-    const { eventId, failedReason, originalJobId } = job.data as {
+    const { eventId, failedReason, originalJobId, totalAttempts } = job.data as {
       eventId: string;
       failedReason: string;
       originalJobId: string;
+      totalAttempts: number;
     };
 
     this.logger.error(
-      `DLQ processing job ${job.id} (original: ${originalJobId}, eventId: ${eventId}): ${failedReason}`,
+      `DLQ processing job ${job.id} (original: ${originalJobId}, eventId: ${eventId}, attempts: ${totalAttempts}): ${failedReason}`,
     );
 
     await this.eventModel.updateOne(

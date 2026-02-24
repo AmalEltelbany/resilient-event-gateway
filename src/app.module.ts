@@ -22,6 +22,8 @@ import { ShipmentsModule } from './shipments/shipments.module.js';
       }),
     }),
 
+    // BullMQ requires its own dedicated connection (uses blocking Redis commands
+    // like BRPOP that cannot be shared). Both connections use the same config source.
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({

@@ -64,7 +64,7 @@ export class EventProcessor extends WorkerHost {
 
     await this.dlqQueue.add(
       job.name,
-      { ...job.data, originalJobId: job.id, failedReason: error.message },
+      { ...job.data, originalJobId: job.id, failedReason: error.message, totalAttempts: job.attemptsMade },
       { jobId: `dlq:${job.id}`, removeOnComplete: true, removeOnFail: false },
     );
   }

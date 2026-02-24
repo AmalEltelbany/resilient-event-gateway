@@ -25,11 +25,18 @@ export class EventsService {
 
   async create(dto: CreateEventDto): Promise<{ status: string; eventId: string }> {
     // Atomic SET NX EX — 'OK' on first receipt, null on duplicate
+    // If Redis is unavailable, degrade gracefully: log and fall through to
+    // MongoDB unique index + worker-level check as the idempotency backstop.
     const key = `${IDEMPOTENCY_PREFIX}${dto.eventId}`;
-    const acquired = await this.redis.set(key, '1', 'EX', IDEMPOTENCY_TTL_S, 'NX');
-    if (acquired === null) {
-      this.logger.warn(`Duplicate event rejected: ${dto.eventId}`);
-      throw new ConflictException(`Event ${dto.eventId} has already been received`);
+    try {
+      const acquired = await this.redis.set(key, '1', 'EX', IDEMPOTENCY_TTL_S, 'NX');
+      if (acquired === null) {
+        this.logger.warn(`Duplicate event rejected at Redis layer: ${dto.eventId}`);
+        throw new ConflictException(`Event ${dto.eventId} has already been received`);
+      }
+    } catch (err) {
+      if (err instanceof ConflictException) throw err;
+      this.logger.error(`Redis idempotency check failed — degrading to DB layer: ${(err as Error).message}`);
     }
 
     const event = await this.eventModel.create({
