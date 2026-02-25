@@ -2,8 +2,10 @@ import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
+import { LoggerModule } from 'nestjs-pino';
 import configuration from './config/configuration.js';
-import { RedisModule } from './common/redis/redis.module.js';
+import { RedisModule } from './infrastructure/redis/redis.module.js';
+import { HealthModule } from './health/health.module.js';
 import { EventsModule } from './events/events.module.js';
 import { ShipmentsModule } from './shipments/shipments.module.js';
 
@@ -13,6 +15,15 @@ import { ShipmentsModule } from './shipments/shipments.module.js';
       isGlobal: true,
       load: [configuration],
       envFilePath: '.env',
+    }),
+
+    LoggerModule.forRoot({
+      pinoHttp: {
+        transport: process.env.NODE_ENV !== 'production'
+          ? { target: 'pino-pretty', options: { colorize: true, singleLine: true } }
+          : undefined,
+        level: process.env.LOG_LEVEL ?? 'info',
+      },
     }),
 
     MongooseModule.forRootAsync({
@@ -45,6 +56,7 @@ import { ShipmentsModule } from './shipments/shipments.module.js';
     }),
 
     RedisModule,
+    HealthModule,
     EventsModule,
     ShipmentsModule,
   ],

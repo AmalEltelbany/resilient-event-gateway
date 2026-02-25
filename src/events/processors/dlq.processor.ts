@@ -3,7 +3,7 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Job } from 'bullmq';
 import { Model } from 'mongoose';
-import { EVENT_DLQ } from '../../queues/queue.constants.js';
+import { EVENT_DLQ } from '../events.constants.js';
 import { Event, EventDocument, EventStatus } from '../schemas/event.schema.js';
 
 @Injectable()

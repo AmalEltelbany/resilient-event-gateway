@@ -1,7 +1,8 @@
-import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, UseGuards } from '@nestjs/common';
-import { HmacGuard } from '../common/guards/hmac.guard.js';
-import { ApiKeyGuard } from '../common/guards/api-key.guard.js';
+import { Body, Controller, Get, HttpCode, HttpStatus, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { HmacGuard } from '../infrastructure/guards/hmac.guard.js';
+import { ApiKeyGuard } from '../infrastructure/guards/api-key.guard.js';
 import { CreateEventDto } from './dto/create-event.dto.js';
+import { PaginationQueryDto } from './dto/pagination-query.dto.js';
 import { EventsService } from './events.service.js';
 
 @Controller('events')
@@ -17,13 +18,20 @@ export class EventsController {
 
   @Get()
   @UseGuards(ApiKeyGuard)
-  findAll() {
-    return this.eventsService.findAll();
+  findAll(@Query() query: PaginationQueryDto) {
+    return this.eventsService.findAll(query);
   }
 
-  @Get(':id')
+  @Get(':eventId')
   @UseGuards(ApiKeyGuard)
-  findOne(@Param('id') id: string) {
-    return this.eventsService.findOne(id);
+  findOne(@Param('eventId') eventId: string) {
+    return this.eventsService.findOne(eventId);
+  }
+
+  @Post(':eventId/retry')
+  @HttpCode(HttpStatus.OK)
+  @UseGuards(ApiKeyGuard)
+  retry(@Param('eventId') eventId: string) {
+    return this.eventsService.retryDeadLettered(eventId);
   }
 }

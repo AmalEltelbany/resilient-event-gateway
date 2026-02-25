@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
-import { Shipment, ShipmentDocument, ShipmentStatus } from './shipment.schema.js';
+import { Shipment, ShipmentDocument, ShipmentStatus } from './schemas/shipment.schema.js';
 
 const CARRIERS = ['FedEx', 'UPS', 'DHL', 'USPS', 'OnTrac'];
 const CITIES = ['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Seattle', 'Miami', 'Denver', 'Boston', 'Atlanta'];
@@ -36,14 +36,14 @@ export class ShipmentSeedService implements OnApplicationBootstrap {
       destination: CITIES[(i + 5) % CITIES.length],
     }));
 
-    let seeded = 0;
+    let inserted = 0;
     for (const seed of seeds) {
-      await this.shipmentModel
+      const result = await this.shipmentModel
         .updateOne({ shipmentId: seed.shipmentId }, { $setOnInsert: seed }, { upsert: true })
         .exec();
-      seeded++;
+      inserted += result.upsertedCount;
     }
 
-    this.logger.log(`Shipment seed complete — ${seeded} records upserted`);
+    this.logger.log(`Shipment seed complete — ${inserted} inserted, ${seeds.length - inserted} already existed`);
   }
 }

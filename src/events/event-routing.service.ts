@@ -1,9 +1,15 @@
 import { Injectable, Logger } from '@nestjs/common';
-import { ShipmentDocument, ShipmentStatus } from '../shipments/shipment.schema.js';
+import { ConfigService } from '@nestjs/config';
+import { ShipmentDocument, ShipmentStatus } from '../shipments/schemas/shipment.schema.js';
 
 @Injectable()
 export class RoutingService {
   private readonly logger = new Logger(RoutingService.name);
+  private readonly failureRate: number;
+
+  constructor(private readonly config: ConfigService) {
+    this.failureRate = this.config.get<number>('routing.failureRate')!;
+  }
 
   private resolveHandler(eventType: string, status: ShipmentStatus): string {
     if (eventType.includes('payment')) return 'payment-confirmation';
@@ -24,7 +30,7 @@ export class RoutingService {
 
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
-    if (Math.random() < 0.2) {
+    if (Math.random() < this.failureRate) {
       this.logger.warn(`Routing failed for shipment ${shipment.shipmentId} (handler: ${handler})`);
       throw new Error(`Routing failure for shipment ${shipment.shipmentId}`);
     }

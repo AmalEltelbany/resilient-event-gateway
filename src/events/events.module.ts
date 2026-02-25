@@ -2,13 +2,11 @@ import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ShipmentsModule } from '../shipments/shipments.module.js';
-import { EVENT_DLQ, EVENT_QUEUE } from '../queues/queue.constants.js';
-import { HmacGuard } from '../common/guards/hmac.guard.js';
-import { ApiKeyGuard } from '../common/guards/api-key.guard.js';
+import { EVENT_DLQ, EVENT_QUEUE } from './events.constants.js';
 import { EventsController } from './events.controller.js';
 import { DlqProcessor } from './processors/dlq.processor.js';
 import { EventProcessor } from './processors/event.processor.js';
-import { RoutingService } from './routing.service.js';
+import { RoutingService } from './event-routing.service.js';
 import { Event, EventSchema } from './schemas/event.schema.js';
 import { EventsService } from './events.service.js';
 
@@ -20,7 +18,7 @@ import { EventsService } from './events.service.js';
     ShipmentsModule,
   ],
   controllers: [EventsController],
-  providers: [EventsService, EventProcessor, DlqProcessor, RoutingService, HmacGuard, ApiKeyGuard],
+  providers: [EventsService, EventProcessor, DlqProcessor, RoutingService],
   exports: [EventsService],
 })
 export class EventsModule {}

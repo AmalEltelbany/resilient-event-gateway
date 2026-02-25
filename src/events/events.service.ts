@@ -1,12 +1,13 @@
 import { InjectQueue } from '@nestjs/bullmq';
-import { ConflictException, Inject, Injectable, Logger } from '@nestjs/common';
+import { BadRequestException, ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
 import { Queue } from 'bullmq';
 import { Redis } from 'ioredis';
-import { Model } from 'mongoose';
-import { REDIS_CLIENT } from '../common/redis/redis.provider.js';
-import { EVENT_QUEUE } from '../queues/queue.constants.js';
+import { Model, Types } from 'mongoose';
+import { REDIS_CLIENT } from '../infrastructure/redis/redis.provider.js';
+import { EVENT_QUEUE } from './events.constants.js';
 import { CreateEventDto } from './dto/create-event.dto.js';
+import { PaginationQueryDto } from './dto/pagination-query.dto.js';
 import { Event, EventDocument, EventStatus } from './schemas/event.schema.js';
 
 // Idempotency key TTL: must exceed max total retry duration (attempts × backoff)
@@ -78,11 +79,62 @@ export class EventsService {
     return event?.status === EventStatus.COMPLETED;
   }
 
-  findAll(): Promise<EventDocument[]> {
-    return this.eventModel.find().sort({ createdAt: -1 }).exec();
+  async findAll(query: PaginationQueryDto): Promise<{ data: EventDocument[]; nextCursor: string | null; hasMore: boolean }> {
+    const limit = query.limit ?? 20;
+    const filter: Record<string, unknown> = {};
+
+    if (query.cursor) {
+      filter._id = { $lt: new Types.ObjectId(query.cursor) };
+    }
+
+    const data = await this.eventModel
+      .find(filter)
+      .sort({ _id: -1 })
+      .limit(limit + 1)
+      .exec();
+
+    const hasMore = data.length > limit;
+    if (hasMore) data.pop();
+
+    const nextCursor = hasMore && data.length > 0
+      ? (data[data.length - 1]._id as Types.ObjectId).toString()
+      : null;
+
+    return { data, nextCursor, hasMore };
   }
 
-  findOne(id: string): Promise<EventDocument | null> {
-    return this.eventModel.findById(id).exec();
+  findOne(eventId: string): Promise<EventDocument | null> {
+    return this.eventModel.findOne({ eventId }).exec();
+  }
+
+  async retryDeadLettered(eventId: string): Promise<{ status: string; eventId: string }> {
+    const event = await this.eventModel.findOne({ eventId }).exec();
+    if (!event) {
+      throw new NotFoundException(`Event ${eventId} not found`);
+    }
+    if (event.status !== EventStatus.DEAD_LETTERED) {
+      throw new BadRequestException(`Event ${eventId} is not dead_lettered (current: ${event.status})`);
+    }
+
+    // Clear the Redis idempotency key so external producers can legitimately
+    // re-send this event in the future without being rejected as a duplicate.
+    await this.redis.del(`${IDEMPOTENCY_PREFIX}${eventId}`);
+
+    await this.eventModel.updateOne(
+      { eventId },
+      { $set: { status: EventStatus.PENDING, errorMessage: null, attempts: 0 } },
+    ).exec();
+
+    await this.eventQueue.add(event.type, {
+      docId: event._id.toString(),
+      eventId: event.eventId,
+      type: event.type,
+      source: event.source,
+      timestamp: event.timestamp,
+      payload: event.payload,
+    }, { jobId: `retry-${event.eventId}-${Date.now()}` });
+
+    this.logger.log(`Dead-lettered event ${eventId} re-enqueued for retry`);
+    return { status: 'requeued', eventId };
   }
 }

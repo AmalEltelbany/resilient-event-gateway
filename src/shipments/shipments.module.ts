@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common';
 import { MongooseModule } from '@nestjs/mongoose';
-import { Shipment, ShipmentSchema } from './shipment.schema.js';
+import { Shipment, ShipmentSchema } from './schemas/shipment.schema.js';
 import { ShipmentSeedService } from './shipment-seed.service.js';
 import { ShipmentsService } from './shipments.service.js';
 

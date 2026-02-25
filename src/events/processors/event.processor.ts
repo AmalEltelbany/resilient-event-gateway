@@ -2,9 +2,9 @@ import { InjectQueue, OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullm
 import { Injectable, Logger } from '@nestjs/common';
 import { Job, Queue } from 'bullmq';
 import { ShipmentsService } from '../../shipments/shipments.service.js';
-import { EVENT_DLQ, EVENT_QUEUE } from '../../queues/queue.constants.js';
+import { EVENT_DLQ, EVENT_QUEUE } from '../events.constants.js';
 import { EventStatus } from '../schemas/event.schema.js';
-import { RoutingService } from '../routing.service.js';
+import { RoutingService } from '../event-routing.service.js';
 import { EventsService } from '../events.service.js';
 
 @Injectable()
@@ -54,8 +54,10 @@ export class EventProcessor extends WorkerHost {
     const maxAttempts = job.opts.attempts ?? 1;
 
     if (job.attemptsMade < maxAttempts) {
-      // Still has retries remaining — mark failed, BullMQ will reschedule
-      await this.eventsService.updateStatus(eventId, EventStatus.FAILED, { errorMessage: error.message });
+      // Still has retries remaining — reset to PENDING so status accurately reflects
+      // that the job will be retried, not permanently failed. Only set FAILED/DEAD_LETTERED
+      // once all retries are exhausted.
+      await this.eventsService.updateStatus(eventId, EventStatus.PENDING, { errorMessage: error.message });
       return;
     }
     this.logger.error(
@@ -66,7 +68,7 @@ export class EventProcessor extends WorkerHost {
     await this.dlqQueue.add(
       job.name,
       { ...job.data, originalJobId: job.id, failedReason: error.message, totalAttempts: job.attemptsMade },
-      { jobId: `dlq:${job.id}`, removeOnComplete: true, removeOnFail: false },
+      { jobId: `dlq-${job.id}`, removeOnComplete: true, removeOnFail: false },
     );
   }
 }

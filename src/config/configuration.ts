@@ -25,5 +25,8 @@ export default () => {
       defaultJobAttempts: parseInt(process.env.QUEUE_JOB_ATTEMPTS ?? '3', 10),
       defaultBackoffDelay: parseInt(process.env.QUEUE_BACKOFF_DELAY_MS ?? '3000', 10),
     },
+    routing: {
+      failureRate: parseFloat(process.env.ROUTING_FAILURE_RATE ?? '0.2'),
+    },
   };
 };
