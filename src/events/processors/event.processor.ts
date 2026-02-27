@@ -97,10 +97,20 @@ export class EventProcessor extends WorkerHost implements OnApplicationBootstrap
 
     // BullMQ fires `failed` on every failure — both retriable (BullMQ will schedule a retry)
     // and terminal (all attempts exhausted, or UnrecoverableError thrown).
-    // We read job.opts.attempts directly from the job — the same value BullMQ uses internally,
-    // so there is no drift between our check and BullMQ's own state machine.
+    //
+    // Timing note: BullMQ increments job.attemptsMade INSIDE moveToFailed(), which runs
+    // before this event fires. So when onFailed runs, attemptsMade already reflects the
+    // completed attempt (e.g. first failure → attemptsMade = 1).
+    //
+    // For normal exhaustion: attemptsMade reaches opts.attempts → isTerminal = true.
+    //
+    // For UnrecoverableError: BullMQ skips retries and moves the job to failed state
+    // immediately, but attemptsMade is only incremented by the one attempt that ran —
+    // it does NOT get burned to opts.attempts. So on a first-attempt UnrecoverableError
+    // with attempts:3, attemptsMade = 1 and 1 >= 3 is false. We must explicitly check
+    // for UnrecoverableError to correctly identify this as a terminal failure.
     const maxAttempts = job.opts.attempts ?? 1;
-    const isTerminal = job.attemptsMade >= maxAttempts;
+    const isTerminal = job.attemptsMade >= maxAttempts || error instanceof UnrecoverableError;
 
     if (!isTerminal) {
       // Job will be retried by BullMQ. Reset DB status to PENDING so the status accurately
