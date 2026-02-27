@@ -1,11 +1,12 @@
-import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { getModelToken } from '@nestjs/mongoose';
-import { Test } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
-import { Event, EventStatus } from './schemas/event.schema.js';
-import { EventsService } from './events.service.js';
-import { EVENT_QUEUE } from './events.constants.js';
+import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
+import { getConnectionToken, getModelToken } from '@nestjs/mongoose';
+import { Test } from '@nestjs/testing';
 import { REDIS_CLIENT } from '../infrastructure/redis/redis.provider.js';
+import { EVENT_QUEUE } from './events.constants.js';
+import { EventsService } from './events.service.js';
+import { Event, EventStatus } from './schemas/event.schema.js';
+import { OutboxEntry } from './schemas/outbox-entry.schema.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -16,7 +17,7 @@ function makeDto(overrides = {}) {
     eventId: 'evt-uuid-1',
     type: 'shipment.status_updated',
     source: 'fedex',
-    timestamp: '2026-01-01T00:00:00.000Z',
+    timestamp: new Date('2026-01-01T00:00:00.000Z'),
     payload: { shipmentId: 'ship-1' },
     ...overrides,
   };
@@ -29,7 +30,7 @@ function makeEvent(overrides = {}) {
     eventId: 'evt-uuid-1',
     type: 'shipment.status_updated',
     source: 'fedex',
-    timestamp: '2026-01-01T00:00:00.000Z',
+    timestamp: new Date('2026-01-01T00:00:00.000Z'),
     payload: { shipmentId: 'ship-1' },
     status: EventStatus.PENDING,
     attempts: 0,
@@ -46,17 +47,39 @@ function makeEvent(overrides = {}) {
 describe('EventsService', () => {
   let service: EventsService;
   let eventModel: any;
+  let outboxModel: any;
   let eventQueue: any;
   let redis: any;
+  let mockSession: any;
 
   beforeEach(async () => {
+    // Mock the MongoDB session / transaction.
+    // withTransaction executes the callback immediately so we can assert on
+    // what create() does inside the transaction.
+    mockSession = {
+      withTransaction: jest.fn().mockImplementation(async (fn) => fn()),
+      endSession: jest.fn().mockResolvedValue(undefined),
+    };
+
+    const mockConnection = {
+      startSession: jest.fn().mockResolvedValue(mockSession),
+    };
+
     eventModel = {
-      create: jest.fn(),
+      create: jest.fn().mockResolvedValue([makeEvent()]),
       updateOne: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({}) }),
       updateMany: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue({ modifiedCount: 0 }) }),
       findOne: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(null) }),
       findOneAndUpdate: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue(null) }),
-      find: jest.fn().mockReturnValue({ sort: jest.fn().mockReturnValue({ limit: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }) }) }),
+      find: jest.fn().mockReturnValue({
+        sort: jest.fn().mockReturnValue({
+          limit: jest.fn().mockReturnValue({ exec: jest.fn().mockResolvedValue([]) }),
+        }),
+      }),
+    };
+
+    outboxModel = {
+      create: jest.fn().mockResolvedValue([{}]),
     };
 
     eventQueue = {
@@ -72,6 +95,8 @@ describe('EventsService', () => {
       providers: [
         EventsService,
         { provide: getModelToken(Event.name), useValue: eventModel },
+        { provide: getModelToken(OutboxEntry.name), useValue: outboxModel },
+        { provide: getConnectionToken(), useValue: mockConnection },
         { provide: getQueueToken(EVENT_QUEUE), useValue: eventQueue },
         { provide: REDIS_CLIENT, useValue: redis },
       ],
@@ -85,39 +110,52 @@ describe('EventsService', () => {
   // -------------------------------------------------------------------------
 
   describe('create()', () => {
-    it('enqueues the job then persists to MongoDB on the happy path', async () => {
+    it('writes Event and OutboxEntry in the same transaction on the happy path', async () => {
       const dto = makeDto();
-      const doc = makeEvent();
-      eventModel.create.mockResolvedValue(doc);
 
       const result = await service.create(dto);
 
-      // Enqueue must happen BEFORE create (ghost-event ordering guarantee)
-      const enqueueOrder = eventQueue.add.mock.invocationCallOrder[0];
-      const persistOrder = eventModel.create.mock.invocationCallOrder[0];
-      expect(enqueueOrder).toBeLessThan(persistOrder);
-
-      expect(eventQueue.add).toHaveBeenCalledWith(
-        dto.type,
-        expect.objectContaining({ eventId: dto.eventId }),
-        { jobId: dto.eventId },
-      );
       expect(result).toEqual({ status: 'accepted', eventId: dto.eventId });
+
+      // Both writes must happen inside withTransaction
+      expect(mockSession.withTransaction).toHaveBeenCalledTimes(1);
+      expect(eventModel.create).toHaveBeenCalledWith(
+        [expect.objectContaining({ eventId: dto.eventId })],
+        { session: mockSession },
+      );
+      expect(outboxModel.create).toHaveBeenCalledWith(
+        [expect.objectContaining({ eventId: dto.eventId })],
+        { session: mockSession },
+      );
+
+      // Session must be closed regardless of outcome
+      expect(mockSession.endSession).toHaveBeenCalled();
+    });
+
+    it('does NOT enqueue to BullMQ directly — queuing is deferred to OutboxPublisherService', async () => {
+      await service.create(makeDto());
+      expect(eventQueue.add).not.toHaveBeenCalled();
     });
 
     it('throws ConflictException when Redis SET NX returns null (duplicate)', async () => {
       redis.set.mockResolvedValue(null);
       await expect(service.create(makeDto())).rejects.toBeInstanceOf(ConflictException);
-      expect(eventQueue.add).not.toHaveBeenCalled();
+      expect(mockSession.withTransaction).not.toHaveBeenCalled();
     });
 
-    it('degrades gracefully when Redis throws — falls through to DB layer', async () => {
+    it('degrades gracefully when Redis throws — falls through to transaction', async () => {
       redis.set.mockRejectedValue(new Error('Redis connection refused'));
-      eventModel.create.mockResolvedValue(makeEvent());
 
-      // Should NOT throw — Redis failure is non-fatal
+      // Should NOT throw — Redis failure is non-fatal, transaction still runs
       await expect(service.create(makeDto())).resolves.toMatchObject({ status: 'accepted' });
-      expect(eventQueue.add).toHaveBeenCalled();
+      expect(mockSession.withTransaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('closes the session even when the transaction throws', async () => {
+      mockSession.withTransaction.mockRejectedValue(new Error('transaction aborted'));
+
+      await expect(service.create(makeDto())).rejects.toThrow('transaction aborted');
+      expect(mockSession.endSession).toHaveBeenCalled();
     });
   });
 
@@ -129,6 +167,16 @@ describe('EventsService', () => {
     it('returns true when event status is COMPLETED', async () => {
       eventModel.findOne.mockReturnValue({
         exec: jest.fn().mockResolvedValue(makeEvent({ status: EventStatus.COMPLETED })),
+      });
+      await expect(service.isCompleted('evt-uuid-1')).resolves.toBe(true);
+    });
+
+    it('returns true when event status is DEAD_LETTERED', async () => {
+      // A zombie job from the original queue must not re-process a dead-lettered event
+      // that the operator has not yet retried. retryDeadLettered() resets status to
+      // PENDING before re-enqueueing, so a legitimately retried event passes this guard.
+      eventModel.findOne.mockReturnValue({
+        exec: jest.fn().mockResolvedValue(makeEvent({ status: EventStatus.DEAD_LETTERED })),
       });
       await expect(service.isCompleted('evt-uuid-1')).resolves.toBe(true);
     });

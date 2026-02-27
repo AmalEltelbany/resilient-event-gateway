@@ -1,14 +1,16 @@
 import { BullModule } from '@nestjs/bullmq';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
+import { APP_FILTER, APP_GUARD } from '@nestjs/core';
 import { MongooseModule } from '@nestjs/mongoose';
 import { ScheduleModule } from '@nestjs/schedule';
-import { ThrottlerModule } from '@nestjs/throttler';
+import { ThrottlerGuard, ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import configuration from './config/configuration.js';
-import { RedisModule } from './infrastructure/redis/redis.module.js';
-import { HealthModule } from './health/health.module.js';
 import { EventsModule } from './events/events.module.js';
+import { HealthModule } from './health/health.module.js';
+import { AllExceptionsFilter } from './infrastructure/filters/all-exceptions.filter.js';
+import { RedisModule } from './infrastructure/redis/redis.module.js';
 import { ShipmentsModule } from './shipments/shipments.module.js';
 
 @Module({
@@ -35,8 +37,6 @@ import { ShipmentsModule } from './shipments/shipments.module.js';
       }),
     }),
 
-    // BullMQ requires its own dedicated connection (uses blocking Redis commands
-    // like BRPOP that cannot be shared). Both connections use the same config source.
     BullModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -57,12 +57,6 @@ import { ShipmentsModule } from './shipments/shipments.module.js';
       }),
     }),
 
-    // Rate limiting — applied globally, with per-route overrides via @Throttle().
-    // Uses in-memory storage (correct for single-instance).
-    // For multi-instance deployments replace ThrottlerStorageService with a
-    // Redis-backed store (e.g. @nest-lab/throttler-storage-redis) so counters
-    // are shared across replicas and a single client can't bypass the limit by
-    // round-robining between instances.
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
@@ -76,13 +70,16 @@ import { ShipmentsModule } from './shipments/shipments.module.js';
       }),
     }),
 
-    // Outbox reconciliation — schedules the periodic stale-PENDING scan.
     ScheduleModule.forRoot(),
 
     RedisModule,
     HealthModule,
     EventsModule,
     ShipmentsModule,
+  ],
+  providers: [
+    { provide: APP_GUARD, useClass: ThrottlerGuard },
+    { provide: APP_FILTER, useClass: AllExceptionsFilter },
   ],
 })
 export class AppModule {}

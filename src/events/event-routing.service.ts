@@ -1,9 +1,10 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { ShipmentDocument, ShipmentStatus } from '../shipments/schemas/shipment.schema.js';
+import { IRoutingService } from './routing.interface.js';
 
 @Injectable()
-export class RoutingService {
+export class RoutingService implements IRoutingService {
   private readonly logger = new Logger(RoutingService.name);
   private readonly failureRate: number;
 
@@ -28,6 +29,9 @@ export class RoutingService {
     const handler = this.resolveHandler(eventType, shipment.status);
     this.logger.log(`Resolved handler: ${handler} [shipment: ${shipment.shipmentId}, status: ${shipment.status}, event: ${eventType}]`);
 
+    // Simulates 2s downstream HTTP latency (e.g. carrier API round-trip).
+    // With processor concurrency=10 this caps throughput at ~5 completions/s by design.
+    // Replace with an actual HTTP call in a real implementation.
     await new Promise((resolve) => setTimeout(resolve, 2000));
 
     if (Math.random() < this.failureRate) {
