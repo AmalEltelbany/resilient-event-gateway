@@ -31,9 +31,14 @@ export class EventProcessor extends WorkerHost implements OnApplicationBootstrap
    * GET /events/:id would see a misleading PROCESSING status for a job that isn't running.
    *
    * This reconciliation runs once at startup, before the worker begins consuming jobs,
-   * so the window is closed immediately. It is intentionally narrow: we only reset events
-   * that were PROCESSING before this process started — active jobs in the current worker
-   * instance are correctly in PROCESSING.
+   * so the window is closed immediately.
+   *
+   * Multi-replica caveat: in a multi-instance deployment, replica B restarting will reset
+   * events that replica A is actively processing. Replica A will immediately re-write
+   * PROCESSING when it next calls updateStatus(), so the race self-heals within milliseconds.
+   * The only observable effect is a brief PENDING blip visible to callers polling that event.
+   * A production fix would use per-instance locking (e.g. a Redis key with the worker
+   * hostname) to scope the reset to jobs owned by this instance only.
    */
   async onApplicationBootstrap(): Promise<void> {
     const count = await this.eventsService.resetStaleProcessing();
