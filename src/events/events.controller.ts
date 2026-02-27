@@ -13,7 +13,6 @@ export class EventsController {
   @Post()
   @HttpCode(HttpStatus.ACCEPTED)
   @UseGuards(HmacGuard)
-  @Throttle({ default: { ttl: 60_000, limit: 200 } })
   create(@Body() dto: CreateEventDto) {
     return this.eventsService.create(dto);
   }

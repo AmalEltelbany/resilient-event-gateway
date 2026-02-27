@@ -4,8 +4,8 @@ import { HydratedDocument } from 'mongoose';
 export type OutboxEntryDocument = HydratedDocument<OutboxEntry>;
 
 export enum OutboxEntryStatus {
-  PENDING = 'PENDING',
-  PROCESSING = 'PROCESSING',
+  PENDING = 'pending',
+  PROCESSING = 'processing',
 }
 
 @Schema({ timestamps: true, collection: 'outbox' })

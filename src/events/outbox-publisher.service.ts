@@ -49,6 +49,10 @@ export class OutboxPublisherService implements OnApplicationBootstrap {
   }
 
   async publish(): Promise<void> {
+    // Release stale PROCESSING entries on every cycle so a crashed replica's
+    // claims are recovered without requiring a full process restart.
+    await this.releaseStaleProcessing();
+
     const pending = await this.outboxModel
       .find({ status: OutboxEntryStatus.PENDING })
       .sort({ createdAt: 1 })
