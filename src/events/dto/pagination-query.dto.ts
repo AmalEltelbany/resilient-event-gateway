@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer';
-import { IsInt, IsOptional, IsString, Max, Min } from 'class-validator';
+import { IsInt, IsMongoId, IsOptional, Max, Min } from 'class-validator';
 
 export class PaginationQueryDto {
   @IsOptional()
@@ -10,6 +10,6 @@ export class PaginationQueryDto {
   limit?: number = 20;
 
   @IsOptional()
-  @IsString()
+  @IsMongoId()
   cursor?: string;
 }

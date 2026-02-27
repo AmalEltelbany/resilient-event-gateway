@@ -1,10 +1,10 @@
 import { Type } from 'class-transformer';
 import {
-  IsISO8601,
-  IsNotEmpty,
-  IsString,
-  IsUUID,
-  ValidateNested,
+    IsDate,
+    IsNotEmpty,
+    IsString,
+    IsUUID,
+    ValidateNested,
 } from 'class-validator';
 import { EventPayloadDto } from './event-payload.dto.js';
 
@@ -20,8 +20,9 @@ export class CreateEventDto {
   @IsNotEmpty()
   source: string;
 
-  @IsISO8601({ strict: true })
-  timestamp: string;
+  @Type(() => Date)
+  @IsDate()
+  timestamp: Date;
 
   @ValidateNested()
   @Type(() => EventPayloadDto)

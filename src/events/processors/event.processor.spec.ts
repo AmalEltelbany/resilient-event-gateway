@@ -1,13 +1,13 @@
-import { Test } from '@nestjs/testing';
 import { getQueueToken } from '@nestjs/bullmq';
-import { UnrecoverableError } from 'bullmq';
 import { NotFoundException } from '@nestjs/common';
-import { EventProcessor } from './event.processor.js';
-import { EventsService } from '../events.service.js';
-import { EventStatus } from '../schemas/event.schema.js';
-import { EVENT_DLQ } from '../events.constants.js';
+import { Test } from '@nestjs/testing';
+import { UnrecoverableError } from 'bullmq';
 import { ShipmentsService } from '../../shipments/shipments.service.js';
-import { RoutingService } from '../event-routing.service.js';
+import { EVENT_DLQ } from '../events.constants.js';
+import { EventsService } from '../events.service.js';
+import { ROUTING_SERVICE } from '../routing.interface.js';
+import { EventStatus } from '../schemas/event.schema.js';
+import { EventProcessor } from './event.processor.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -65,7 +65,7 @@ describe('EventProcessor', () => {
         EventProcessor,
         { provide: EventsService, useValue: eventsService },
         { provide: ShipmentsService, useValue: shipmentsService },
-        { provide: RoutingService, useValue: routingService },
+        { provide: ROUTING_SERVICE, useValue: routingService },
         { provide: getQueueToken(EVENT_DLQ), useValue: dlqQueue },
       ],
     }).compile();
@@ -122,19 +122,16 @@ describe('EventProcessor', () => {
   // -------------------------------------------------------------------------
 
   describe('process() — permanent failure', () => {
-    it('marks FAILED and throws UnrecoverableError when shipment is not found', async () => {
+    it('throws UnrecoverableError when shipment is not found, without writing any status', async () => {
       shipmentsService.findByShipmentId.mockRejectedValue(new NotFoundException('Shipment not found'));
       const job = makeJob();
 
       await expect(processor.process(job)).rejects.toBeInstanceOf(UnrecoverableError);
 
-      expect(eventsService.updateStatus).toHaveBeenCalledWith(
-        'evt-1', EventStatus.FAILED, { errorMessage: 'Shipment not found' },
-      );
-      // Must NOT mark PROCESSING before a permanent failure
-      const processingCall = (eventsService.updateStatus as jest.Mock).mock.calls
-        .find(c => c[1] === EventStatus.PROCESSING);
-      expect(processingCall).toBeUndefined();
+      // Must NOT write FAILED — that state is deprecated and leaks to API consumers.
+      // Must NOT write PROCESSING — the job never reached the routing step.
+      // onFailed() handles the terminal path: DLQ → DlqProcessor → DEAD_LETTERED.
+      expect(eventsService.updateStatus).not.toHaveBeenCalled();
     });
   });
 

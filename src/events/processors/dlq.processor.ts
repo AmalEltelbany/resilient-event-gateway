@@ -10,13 +10,7 @@ import { EventsService } from '../events.service.js';
 export class DlqProcessor extends WorkerHost {
   private readonly logger = new Logger(DlqProcessor.name);
 
-  constructor(
-    // Use EventsService rather than injecting the Mongoose model directly.
-    // Routing through the service layer keeps the architecture boundary clean:
-    // any future logic added to updateStatus() (metrics, domain events, audit log)
-    // is automatically inherited here without changes to this processor.
-    private readonly eventsService: EventsService,
-  ) {
+  constructor(private readonly eventsService: EventsService) {
     super();
   }
 
