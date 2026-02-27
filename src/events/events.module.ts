@@ -9,6 +9,7 @@ import { EventProcessor } from './processors/event.processor.js';
 import { RoutingService } from './event-routing.service.js';
 import { Event, EventSchema } from './schemas/event.schema.js';
 import { EventsService } from './events.service.js';
+import { OutboxReconciliationService } from './outbox-reconciliation.service.js';
 
 @Module({
   imports: [
@@ -18,7 +19,7 @@ import { EventsService } from './events.service.js';
     ShipmentsModule,
   ],
   controllers: [EventsController],
-  providers: [EventsService, EventProcessor, DlqProcessor, RoutingService],
+  providers: [EventsService, EventProcessor, DlqProcessor, RoutingService, OutboxReconciliationService],
   exports: [EventsService],
 })
 export class EventsModule {}

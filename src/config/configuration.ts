@@ -31,5 +31,18 @@ export default () => {
     routing: {
       failureRate: parseFloat(process.env.ROUTING_FAILURE_RATE ?? '0.2'),
     },
+    throttle: {
+      // Sliding window: THROTTLE_LIMIT requests per THROTTLE_TTL_MS milliseconds.
+      // Default: 200 requests per minute per IP — generous for legitimate producers,
+      // tight enough to absorb a mis-configured client hammering the ingestion endpoint.
+      ttlMs: parseInt(process.env.THROTTLE_TTL_MS ?? '60000', 10),
+      limit: parseInt(process.env.THROTTLE_LIMIT ?? '200', 10),
+    },
+    outbox: {
+      // How often the reconciliation job scans for orphaned PENDING events (ms).
+      intervalMs: parseInt(process.env.OUTBOX_INTERVAL_MS ?? '300000', 10), // 5 min
+      // Events stuck in PENDING for longer than this threshold are considered orphaned.
+      staleThresholdMs: parseInt(process.env.OUTBOX_STALE_THRESHOLD_MS ?? '300000', 10), // 5 min
+    },
   };
 };
