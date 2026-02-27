@@ -62,16 +62,16 @@ export class EventsService {
   async updateStatus(
     eventId: string,
     status: EventStatus,
-    extra: { errorMessage?: string | null; processedAt?: Date; incrementAttempts?: boolean } = {},
+    extra: { errorMessage?: string | null; processedAt?: Date; attempts?: number } = {},
   ): Promise<void> {
     const update: Record<string, unknown> = { status };
     if (extra.errorMessage !== undefined) update.errorMessage = extra.errorMessage;
     if (extra.processedAt !== undefined) update.processedAt = extra.processedAt;
+    // Set attempts to the explicit value from BullMQ (single source of truth).
+    // This avoids double-counting on retries and ensures the counter is always in sync.
+    if (extra.attempts !== undefined) update.attempts = extra.attempts;
 
-    const op: Record<string, unknown> = { $set: update };
-    if (extra.incrementAttempts) op.$inc = { attempts: 1 };
-
-    await this.eventModel.updateOne({ eventId }, op).exec();
+    await this.eventModel.updateOne({ eventId }, { $set: update }).exec();
   }
 
   async isCompleted(eventId: string): Promise<boolean> {
@@ -103,27 +103,38 @@ export class EventsService {
     return { data, nextCursor, hasMore };
   }
 
-  findOne(eventId: string): Promise<EventDocument | null> {
-    return this.eventModel.findOne({ eventId }).exec();
-  }
-
-  async retryDeadLettered(eventId: string): Promise<{ status: string; eventId: string }> {
+  async findOne(eventId: string): Promise<EventDocument> {
     const event = await this.eventModel.findOne({ eventId }).exec();
     if (!event) {
       throw new NotFoundException(`Event ${eventId} not found`);
     }
-    if (event.status !== EventStatus.DEAD_LETTERED) {
-      throw new BadRequestException(`Event ${eventId} is not dead_lettered (current: ${event.status})`);
+    return event;
+  }
+
+  async retryDeadLettered(eventId: string): Promise<{ status: string; eventId: string }> {
+    // Atomic claim: only the first concurrent caller whose filter matches will
+    // get a non-null result. A second simultaneous call sees status already
+    // PENDING (not DEAD_LETTERED) and gets null → 409, preventing double-enqueue.
+    const event = await this.eventModel.findOneAndUpdate(
+      { eventId, status: EventStatus.DEAD_LETTERED },
+      { $set: { status: EventStatus.PENDING, errorMessage: null, attempts: 0 } },
+      { new: true },
+    ).exec();
+
+    if (!event) {
+      // Either not found, or already claimed by another concurrent request.
+      const existing = await this.eventModel.findOne({ eventId }, { status: 1 }).exec();
+      if (!existing) {
+        throw new NotFoundException(`Event ${eventId} not found`);
+      }
+      throw new BadRequestException(
+        `Event ${eventId} is not dead_lettered (current: ${existing.status})`,
+      );
     }
 
     // Clear the Redis idempotency key so external producers can legitimately
     // re-send this event in the future without being rejected as a duplicate.
     await this.redis.del(`${IDEMPOTENCY_PREFIX}${eventId}`);
-
-    await this.eventModel.updateOne(
-      { eventId },
-      { $set: { status: EventStatus.PENDING, errorMessage: null, attempts: 0 } },
-    ).exec();
 
     await this.eventQueue.add(event.type, {
       docId: event._id.toString(),
