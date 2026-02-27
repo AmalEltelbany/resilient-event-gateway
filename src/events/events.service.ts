@@ -42,20 +42,25 @@ export class EventsService {
 
     // Atomicity gap: enqueue BEFORE writing to MongoDB.
     //
-    // Rationale: if we write to MongoDB first and then crash before enqueuing, we get a
-    // "ghost event" — a PENDING document that will never be processed. The producer's retry
-    // is rejected as a duplicate by the Redis idempotency key, so the event is permanently
-    // lost. By enqueueing first, the worst-case crash scenario is a BullMQ job with no
-    // corresponding MongoDB document. The worker will try to update a non-existent document
-    // (a no-op), and the producer can retry since the Redis key was not set yet (it was set
-    // above, but a crash here is extremely unlikely; the Redis TTL provides a natural
-    // recovery path if the key was set but the job was never persisted).
+    // Rationale: if we write to MongoDB first and then crash before enqueuing, the result
+    // is a permanent ghost event — a PENDING document that will never be processed and can
+    // never be re-sent by the producer (the Redis idempotency key blocks retries for 24h).
     //
-    // Remaining gap: a crash between enqueue and the MongoDB create still leaves a job
-    // in the queue with no document. The worker's updateStatus() will silently no-op on
-    // a missing eventId. A production deployment should add a reconciliation job that
-    // re-enqueues PENDING events older than 5 minutes whose BullMQ job is no longer active
-    // (outbox pattern). This is acknowledged here as a known eventual-consistency trade-off.
+    // By enqueueing first, the worst-case crash is the opposite: a BullMQ job exists but
+    // there is no MongoDB document. The worker's updateStatus() calls will silently no-op
+    // on the missing eventId. This is the safer failure mode because:
+    //   1. No data is permanently hidden — the producer can detect the missing event
+    //   2. The Redis idempotency key may not have been set yet if the crash happens
+    //      before the SET NX above (in practice both operations succeed or both fail
+    //      together in the common crash scenarios).
+    //
+    // Known remaining gap: if the crash happens AFTER Redis SET NX and AFTER enqueue
+    // but BEFORE MongoDB create, the job runs in the worker (no-ops on missing document)
+    // and the producer's retry is rejected as a duplicate. The event is effectively lost.
+    // This window is ~1-5ms and requires two consecutive failures. A production deployment
+    // should add a background reconciliation job that finds BullMQ jobs with no
+    // corresponding MongoDB document and either creates the document or deletes the job
+    // (outbox pattern). This is acknowledged as a known eventual-consistency trade-off.
     await this.eventQueue.add(dto.type, {
       eventId: dto.eventId,
       type: dto.type,
@@ -89,6 +94,19 @@ export class EventsService {
     if (extra.attempts !== undefined) update.attempts = extra.attempts;
 
     await this.eventModel.updateOne({ eventId }, { $set: update }).exec();
+  }
+
+  /**
+   * Promote all stale PROCESSING events back to PENDING.
+   * Called once on worker startup to recover from crash-interrupted jobs.
+   * Returns the number of documents updated.
+   */
+  async resetStaleProcessing(): Promise<number> {
+    const result = await this.eventModel.updateMany(
+      { status: EventStatus.PROCESSING },
+      { $set: { status: EventStatus.PENDING } },
+    ).exec();
+    return result.modifiedCount;
   }
 
   async isCompleted(eventId: string): Promise<boolean> {

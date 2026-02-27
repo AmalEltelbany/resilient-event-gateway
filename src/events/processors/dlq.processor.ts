@@ -1,10 +1,9 @@
 import { Processor, WorkerHost } from '@nestjs/bullmq';
 import { Injectable, Logger } from '@nestjs/common';
-import { InjectModel } from '@nestjs/mongoose';
 import { Job } from 'bullmq';
-import { Model } from 'mongoose';
 import { EVENT_DLQ } from '../events.constants.js';
-import { Event, EventDocument, EventStatus } from '../schemas/event.schema.js';
+import { EventStatus } from '../schemas/event.schema.js';
+import { EventsService } from '../events.service.js';
 
 @Injectable()
 @Processor(EVENT_DLQ, { concurrency: 5 })
@@ -12,7 +11,11 @@ export class DlqProcessor extends WorkerHost {
   private readonly logger = new Logger(DlqProcessor.name);
 
   constructor(
-    @InjectModel(Event.name) private readonly eventModel: Model<EventDocument>,
+    // Use EventsService rather than injecting the Mongoose model directly.
+    // Routing through the service layer keeps the architecture boundary clean:
+    // any future logic added to updateStatus() (metrics, domain events, audit log)
+    // is automatically inherited here without changes to this processor.
+    private readonly eventsService: EventsService,
   ) {
     super();
   }
@@ -29,15 +32,9 @@ export class DlqProcessor extends WorkerHost {
       `DLQ processing job ${job.id} (original: ${originalJobId}, eventId: ${eventId}, attempts: ${totalAttempts}): ${failedReason}`,
     );
 
-    await this.eventModel.updateOne(
-      { eventId },
-      {
-        $set: {
-          status: EventStatus.DEAD_LETTERED,
-          errorMessage: failedReason,
-        },
-      },
-    ).exec();
+    await this.eventsService.updateStatus(eventId, EventStatus.DEAD_LETTERED, {
+      errorMessage: failedReason,
+    });
 
     this.logger.warn(`Event ${eventId} marked as dead_lettered`);
   }

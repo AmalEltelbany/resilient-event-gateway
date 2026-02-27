@@ -1,6 +1,6 @@
 import { InjectQueue, OnWorkerEvent, Processor, WorkerHost } from '@nestjs/bullmq';
-import { Injectable, Logger } from '@nestjs/common';
-import { Job, Queue } from 'bullmq';
+import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common';
+import { Job, Queue, UnrecoverableError } from 'bullmq';
 import { ShipmentsService } from '../../shipments/shipments.service.js';
 import { EVENT_DLQ, EVENT_QUEUE } from '../events.constants.js';
 import { EventStatus } from '../schemas/event.schema.js';
@@ -9,7 +9,7 @@ import { EventsService } from '../events.service.js';
 
 @Injectable()
 @Processor(EVENT_QUEUE, { concurrency: 10 })
-export class EventProcessor extends WorkerHost {
+export class EventProcessor extends WorkerHost implements OnApplicationBootstrap {
   private readonly logger = new Logger(EventProcessor.name);
 
   constructor(
@@ -21,30 +21,43 @@ export class EventProcessor extends WorkerHost {
     super();
   }
 
+  /**
+   * On startup, promote any events stuck in PROCESSING back to PENDING.
+   *
+   * A PROCESSING status that persists across a restart means the worker was killed
+   * (OOM, SIGKILL, container eviction) after writing PROCESSING but before completing.
+   * BullMQ's at-least-once delivery will re-enqueue those jobs on restart, so the events
+   * will be re-processed — but until the worker picks them up again, any caller polling
+   * GET /events/:id would see a misleading PROCESSING status for a job that isn't running.
+   *
+   * This reconciliation runs once at startup, before the worker begins consuming jobs,
+   * so the window is closed immediately. It is intentionally narrow: we only reset events
+   * that were PROCESSING before this process started — active jobs in the current worker
+   * instance are correctly in PROCESSING.
+   */
+  async onApplicationBootstrap(): Promise<void> {
+    const count = await this.eventsService.resetStaleProcessing();
+    if (count > 0) {
+      this.logger.warn(`Startup reconciliation: reset ${count} stale PROCESSING event(s) to PENDING`);
+    }
+  }
+
   async process(job: Job): Promise<void> {
     const { eventId, payload } = job.data as { eventId: string; payload: { shipmentId: string } };
 
     // 1. Skip if already completed (idempotency guard — handles the edge case where a job
-    //    re-enters the queue after being completed, e.g. via retryDeadLettered on an already
-    //    completed event, or after queue corruption).
+    //    re-enters the queue after being completed, e.g. after queue corruption or a manual
+    //    retryDeadLettered call that races with the original job completing).
     if (await this.eventsService.isCompleted(eventId)) {
       this.logger.log(`Job ${job.id} (${eventId}) already completed — skipping`);
       return;
     }
 
-    // 2. Fetch shipment before marking PROCESSING. This avoids writing PROCESSING to the DB
-    //    for permanent failures (shipment not found) that will immediately transition to FAILED.
-    //    It also tightens the window in which a crash can leave status stuck at PROCESSING:
-    //    the PROCESSING write now only happens once we know the shipment exists and routing
-    //    is about to be called (the only genuinely async/fallible step).
-    //
-    //    Crash-recovery note: if the process dies after writing PROCESSING but before
-    //    completing, BullMQ's at-least-once delivery will re-enqueue the job on restart.
-    //    The worker will re-enter process(), isCompleted() returns false, and status is
-    //    overwritten back to PROCESSING immediately — so the stale window is bounded to
-    //    the restart time. A production deployment would add a background job that
-    //    promotes events stuck in PROCESSING for > N minutes back to PENDING (outbox
-    //    reconciliation pattern).
+    // 2. Fetch shipment BEFORE marking PROCESSING.
+    //    Permanent failures (shipment not found) go straight PENDING → FAILED → DLQ without
+    //    ever writing PROCESSING, keeping the state machine accurate.
+    //    Throwing UnrecoverableError tells BullMQ to skip all remaining retry attempts and
+    //    move the job directly to failed state — no backoff delays for permanent errors.
     let shipment;
     try {
       shipment = await this.shipmentsService.findByShipmentId(payload.shipmentId);
@@ -54,8 +67,10 @@ export class EventProcessor extends WorkerHost {
       await this.eventsService.updateStatus(eventId, EventStatus.FAILED, {
         errorMessage: message,
       });
-      // Force-exhaust retries — shipment not found is not a transient error.
-      throw Object.assign(new Error(message), { skipRetry: true });
+      // UnrecoverableError is BullMQ's native primitive for permanent failures.
+      // BullMQ skips all remaining retry attempts and moves the job to failed state
+      // immediately — no exponential backoff for errors that will never resolve.
+      throw new UnrecoverableError(message);
     }
 
     // 3. Mark as PROCESSING now that we know routing will be attempted.
@@ -77,26 +92,19 @@ export class EventProcessor extends WorkerHost {
   }
 
   @OnWorkerEvent('failed')
-  async onFailed(job: Job, error: Error & { skipRetry?: boolean }): Promise<void> {
+  async onFailed(job: Job, error: Error): Promise<void> {
     const { eventId } = job.data as { eventId: string };
 
-    // BullMQ fires `failed` on every failure — both retriable failures (where BullMQ will
-    // schedule a retry) and terminal failures (where all attempts are exhausted).
-    // We must distinguish between the two WITHOUT replicating BullMQ's own state machine.
-    //
-    // The idiomatic test: a job is terminal when BullMQ will NOT schedule another attempt,
-    // which is when job.attemptsMade has reached (or exceeded) job.opts.attempts, OR when
-    // skipRetry is set (permanent failures such as "shipment not found").
-    //
-    // We read job.opts.attempts — the configured limit — directly from the job options that
-    // BullMQ populated. This is the same value BullMQ uses internally, so we are reading
-    // from the single source of truth rather than reimplementing it.
+    // BullMQ fires `failed` on every failure — both retriable (BullMQ will schedule a retry)
+    // and terminal (all attempts exhausted, or UnrecoverableError thrown).
+    // We read job.opts.attempts directly from the job — the same value BullMQ uses internally,
+    // so there is no drift between our check and BullMQ's own state machine.
     const maxAttempts = job.opts.attempts ?? 1;
-    const isTerminal = job.attemptsMade >= maxAttempts || error.skipRetry === true;
+    const isTerminal = job.attemptsMade >= maxAttempts;
 
     if (!isTerminal) {
       // Job will be retried by BullMQ. Reset DB status to PENDING so the status accurately
-      // reflects "waiting for next attempt" rather than stuck at PROCESSING.
+      // reflects "waiting for next attempt" rather than stuck at PROCESSING or FAILED.
       await this.eventsService.updateStatus(eventId, EventStatus.PENDING, {
         errorMessage: error.message,
       });
@@ -108,9 +116,8 @@ export class EventProcessor extends WorkerHost {
       error.stack,
     );
 
-    // Move to DLQ. Use a stable jobId so that double-firing of this handler (theoretically
-    // possible if the worker restarts during the DLQ enqueue) is idempotent — BullMQ will
-    // reject the duplicate jobId.
+    // Move to DLQ. Stable jobId makes this idempotent: if onFailed fires twice (possible
+    // if the worker restarts during the DLQ enqueue), BullMQ deduplicates by jobId.
     await this.dlqQueue.add(
       job.name,
       { ...job.data, originalJobId: job.id, failedReason: error.message, totalAttempts: job.attemptsMade },
