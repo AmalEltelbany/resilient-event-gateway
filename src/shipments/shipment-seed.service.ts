@@ -3,8 +3,8 @@ import { InjectModel } from '@nestjs/mongoose';
 import { Model } from 'mongoose';
 import { Shipment, ShipmentDocument, ShipmentStatus } from './schemas/shipment.schema.js';
 
-const CARRIERS = ['FedEx', 'UPS', 'DHL', 'USPS', 'OnTrac'];
-const CITIES = ['New York', 'Los Angeles', 'Chicago', 'Houston', 'Phoenix', 'Seattle', 'Miami', 'Denver', 'Boston', 'Atlanta'];
+const CARRIERS = ['Aramex', 'Egypt Post', 'DHL Egypt', 'Bosta', 'Mylerz'];
+const CITIES = ['Cairo', 'Alexandria', 'Giza', 'Port Said', 'Suez', 'Luxor', 'Aswan', 'Mansoura', 'Tanta', 'Hurghada'];
 const STATUSES = [
   ShipmentStatus.PENDING,
   ShipmentStatus.IN_TRANSIT,
