@@ -10,11 +10,13 @@ services:
     env_file:
       - .env
     environment:
-      MONGO_URI: mongodb://${MONGO_ROOT_USER:-root}:${MONGO_ROOT_PASSWORD:-secret}@mongodb:27017/${MONGO_DB:-resilient-event-gateway}?authSource=admin
+      MONGO_URI: mongodb://mongodb:27017/${MONGO_DB:-resilient-event-gateway}?replicaSet=rs0&directConnection=true
       REDIS_HOST: redis
     depends_on:
       mongodb:
         condition: service_healthy
+      rs-init:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
     healthcheck:
@@ -30,22 +32,45 @@ services:
     image: mongo:7
     container_name: reg_mongodb
     restart: unless-stopped
+    command: mongod --replSet rs0 --bind_ip_all
     ports:
       - '${MONGO_PORT:-27017}:27017'
-    environment:
-      MONGO_INITDB_ROOT_USERNAME: ${MONGO_ROOT_USER:-root}
-      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_ROOT_PASSWORD:-secret}
-      MONGO_INITDB_DATABASE: ${MONGO_DB:-resilient-event-gateway}
     healthcheck:
-      test: ['CMD', 'mongosh', '--eval', "db.runCommand('ping').ok"]
+      test: ['CMD', 'mongosh', '--eval', "db.adminCommand('ping').ok", '--quiet']
       interval: 10s
       timeout: 5s
       retries: 5
-      start_period: 10s
+      start_period: 15s
     volumes:
       - mongo_data:/data/db
     networks:
       - reg_network
+
+  rs-init:
+    image: mongo:7
+    container_name: reg_rs_init
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    command: >
+      mongosh
+      --host mongodb
+      --eval "
+        try {
+          rs.initiate({ _id: 'rs0', members: [{ _id: 0, host: 'mongodb:27017' }] });
+          print('Replica set initiated');
+        } catch(e) {
+          if (e.codeName === 'AlreadyInitialized') {
+            print('Replica set already initialized — skipping');
+          } else {
+            printjson(e);
+            quit(1);
+          }
+        }
+      "
+    networks:
+      - reg_network
+    restart: 'no'
 
   redis:
     image: redis:7-alpine
@@ -68,7 +93,6 @@ services:
     networks:
       - reg_network
 
-  # Optional: Redis GUI
   redis-commander:
     image: rediscommander/redis-commander:latest
     container_name: reg_redis_commander
