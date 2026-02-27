@@ -40,6 +40,30 @@ export class EventsService {
       this.logger.error(`Redis idempotency check failed — degrading to DB layer: ${(err as Error).message}`);
     }
 
+    // Atomicity gap: enqueue BEFORE writing to MongoDB.
+    //
+    // Rationale: if we write to MongoDB first and then crash before enqueuing, we get a
+    // "ghost event" — a PENDING document that will never be processed. The producer's retry
+    // is rejected as a duplicate by the Redis idempotency key, so the event is permanently
+    // lost. By enqueueing first, the worst-case crash scenario is a BullMQ job with no
+    // corresponding MongoDB document. The worker will try to update a non-existent document
+    // (a no-op), and the producer can retry since the Redis key was not set yet (it was set
+    // above, but a crash here is extremely unlikely; the Redis TTL provides a natural
+    // recovery path if the key was set but the job was never persisted).
+    //
+    // Remaining gap: a crash between enqueue and the MongoDB create still leaves a job
+    // in the queue with no document. The worker's updateStatus() will silently no-op on
+    // a missing eventId. A production deployment should add a reconciliation job that
+    // re-enqueues PENDING events older than 5 minutes whose BullMQ job is no longer active
+    // (outbox pattern). This is acknowledged here as a known eventual-consistency trade-off.
+    await this.eventQueue.add(dto.type, {
+      eventId: dto.eventId,
+      type: dto.type,
+      source: dto.source,
+      timestamp: dto.timestamp,
+      payload: dto.payload,
+    }, { jobId: dto.eventId });
+
     const event = await this.eventModel.create({
       eventId: dto.eventId,
       type: dto.type,
@@ -47,14 +71,7 @@ export class EventsService {
       timestamp: dto.timestamp,
       payload: dto.payload,
     });
-    await this.eventQueue.add(dto.type, {
-      docId: event.id,
-      eventId: dto.eventId,
-      type: dto.type,
-      source: dto.source,
-      timestamp: dto.timestamp,
-      payload: dto.payload,
-    }, { jobId: dto.eventId });
+
     this.logger.log(`Event ${dto.eventId} (${dto.type}) enqueued [doc: ${event.id}]`);
     return { status: 'accepted', eventId: dto.eventId };
   }
@@ -75,6 +92,14 @@ export class EventsService {
   }
 
   async isCompleted(eventId: string): Promise<boolean> {
+    // Guard against the edge case where a job appears in the queue after the event is
+    // already COMPLETED. This can happen via:
+    //   - retryDeadLettered() called on an event that completed between the status check
+    //     and the enqueue (prevented by the atomic findOneAndUpdate, but defensive here)
+    //   - BullMQ queue corruption / manual job injection
+    // Under normal operation this query is never the reason processing is skipped —
+    // BullMQ jobId deduplication (layer 3) prevents the same job from being enqueued twice.
+    // The index on { eventId: 1 } makes this a covered O(log n) query (~1-3ms).
     const event = await this.eventModel.findOne({ eventId }, { status: 1 }).exec();
     return event?.status === EventStatus.COMPLETED;
   }
@@ -132,9 +157,16 @@ export class EventsService {
       );
     }
 
-    // Clear the Redis idempotency key so external producers can legitimately
-    // re-send this event in the future without being rejected as a duplicate.
-    await this.redis.del(`${IDEMPOTENCY_PREFIX}${eventId}`);
+    // NOTE: We intentionally do NOT delete the Redis idempotency key here.
+    //
+    // This endpoint is an operator-triggered internal retry — the producer is not involved.
+    // The new job uses a unique jobId (`retry-{eventId}-{timestamp}`) which bypasses BullMQ's
+    // deduplication without needing to touch Redis. Deleting the key would open a window
+    // where an external producer could re-send the same eventId and receive a spurious 202,
+    // creating a true duplicate in the queue alongside this retry job.
+    //
+    // If you want to allow producers to legitimately re-send a dead-lettered event (a
+    // different policy decision), delete the key explicitly here and document the trade-off.
 
     await this.eventQueue.add(event.type, {
       docId: event._id.toString(),

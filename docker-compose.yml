@@ -58,7 +58,7 @@ services:
       --requirepass ${REDIS_PASSWORD:-redispassword}
       --appendonly yes
     healthcheck:
-      test: ['CMD', 'redis-cli', '-a', '${REDIS_PASSWORD:-redispassword}', 'ping']
+      test: ['CMD-SHELL', 'redis-cli -a "$${REDIS_PASSWORD:-redispassword}" ping']
       interval: 10s
       timeout: 5s
       retries: 5

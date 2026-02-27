@@ -27,7 +27,7 @@ export class HmacGuard implements CanActivate {
       throw new UnauthorizedException('Missing x-signature header');
     }
 
-    const rawBody = (req as any).rawBody as Buffer | undefined;
+    const rawBody = req.rawBody;
     if (!rawBody) {
       this.logger.warn('Raw body unavailable for HMAC validation');
       throw new UnauthorizedException('Unable to verify request signature');

@@ -7,6 +7,13 @@ export enum EventStatus {
   PENDING = 'pending',
   PROCESSING = 'processing',
   COMPLETED = 'completed',
+  /**
+   * FAILED is a *transient* intermediate state, not a terminal one.
+   * It is set by EventProcessor when a permanent error occurs (e.g. shipment not found),
+   * immediately before the job is moved to the DLQ. The DlqProcessor then transitions
+   * the event to DEAD_LETTERED, which is the actual terminal failure state.
+   * A caller observing FAILED for more than a few seconds indicates a DlqProcessor lag.
+   */
   FAILED = 'failed',
   DEAD_LETTERED = 'dead_lettered',
 }

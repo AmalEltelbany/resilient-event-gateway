@@ -21,7 +21,10 @@ export default () => {
       password: process.env.REDIS_PASSWORD ?? undefined,
     },
     queue: {
-      eventQueueName: process.env.EVENT_QUEUE_NAME ?? 'events',
+      // eventQueueName is intentionally not configurable: events.constants.ts hardcodes
+      // 'events' and 'events-dlq' as the queue names, which are used by both producers and
+      // consumers. Making them configurable would require threading the value through every
+      // @InjectQueue() and @Processor() decorator, adding complexity with no practical benefit.
       defaultJobAttempts: parseInt(process.env.QUEUE_JOB_ATTEMPTS ?? '3', 10),
       defaultBackoffDelay: parseInt(process.env.QUEUE_BACKOFF_DELAY_MS ?? '3000', 10),
     },
