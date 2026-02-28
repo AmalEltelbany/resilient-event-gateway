@@ -105,8 +105,6 @@ services:
       - redis
     networks:
       - reg_network
-    profiles:
-      - tools
 
 volumes:
   mongo_data:

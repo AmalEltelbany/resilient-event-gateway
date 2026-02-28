@@ -25,9 +25,23 @@
 
 import crypto from 'crypto';
 import http from 'http';
+import fs from 'fs';
 
 const HOST = process.env.HOST ?? 'localhost';
 const PORT = process.env.PORT ?? 3000;
+
+// --out <file>: write all output to a file instead of stdout (avoids EPIPE on Windows)
+const outFlagIndex = process.argv.indexOf('--out');
+const outFile = outFlagIndex !== -1 ? process.argv[outFlagIndex + 1] : null;
+const _log = outFile
+  ? (...args) => fs.appendFileSync(outFile, args.join(' ') + '\n', 'utf8')
+  : console.log.bind(console);
+
+// Clear the file if it exists
+if (outFile) {
+  fs.writeFileSync(outFile, '', 'utf8');
+  console.log(`Writing output to ${outFile} ...`);
+}
 const SECRET = process.env.WEBHOOK_SECRET;
 const API_KEY = process.env.API_KEY;
 const TOTAL = 100;
@@ -166,7 +180,7 @@ async function runBatched() {
 
 async function run() {
   const mode = BATCHED_MODE ? 'batched (10 req / 50ms)' : 'concurrent (all at once)';
-  console.log(`\nFiring ${TOTAL} requests to http://${HOST}:${PORT}/api/events [mode: ${mode}]\n`);
+  _log(`\nFiring ${TOTAL} requests to http://${HOST}:${PORT}/api/events [mode: ${mode}]\n`);
 
   const start = Date.now();
 
@@ -195,36 +209,36 @@ async function run() {
   const p95 = durations[Math.floor(durations.length * 0.95)];
   const under150 = durations.filter((d) => d < 150).length;
 
-  console.log('═══════════════════════════════════════════');
-  console.log('           LOAD TEST RESULTS               ');
-  console.log('═══════════════════════════════════════════');
-  console.log(`  Total requests  : ${TOTAL}`);
-  console.log(`  Passed (202)    : ${passed.length}`);
-  console.log(`  Failed          : ${failed.length}`);
-  console.log(`  Under 150ms     : ${under150}/${TOTAL}`);
-  console.log(`  Min latency     : ${durations[0]}ms`);
-  console.log(`  p50 latency     : ${p50}ms`);
-  console.log(`  p95 latency     : ${p95}ms`);
-  console.log(`  Avg latency     : ${avgDuration}ms`);
-  console.log(`  Max latency     : ${durations[durations.length - 1]}ms`);
-  console.log(`  Total wall time : ${totalTime}ms`);
-  console.log('═══════════════════════════════════════════');
+  _log('═══════════════════════════════════════════');
+  _log('           LOAD TEST RESULTS               ');
+  _log('═══════════════════════════════════════════');
+  _log(`  Total requests  : ${TOTAL}`);
+  _log(`  Passed (202)    : ${passed.length}`);
+  _log(`  Failed          : ${failed.length}`);
+  _log(`  Under 150ms     : ${under150}/${TOTAL}`);
+  _log(`  Min latency     : ${durations[0]}ms`);
+  _log(`  p50 latency     : ${p50}ms`);
+  _log(`  p95 latency     : ${p95}ms`);
+  _log(`  Avg latency     : ${avgDuration}ms`);
+  _log(`  Max latency     : ${durations[durations.length - 1]}ms`);
+  _log(`  Total wall time : ${totalTime}ms`);
+  _log('═══════════════════════════════════════════');
 
   if (failed.length > 0) {
-    console.log('\nFAILED REQUESTS:');
+    _log('\nFAILED REQUESTS:');
     failed.forEach((r) => {
-      console.log(`  [${r.index}] status=${r.status} eventId=${r.eventId} ${r.error ?? ''}`);
+      _log(`  [${r.index}] status=${r.status} eventId=${r.eventId} ${r.error ?? ''}`);
     });
   } else {
-    console.log('\nALL 100 REQUESTS ACCEPTED — ZERO FAILURES');
+    _log('\nALL 100 REQUESTS ACCEPTED — ZERO FAILURES');
   }
 
-  console.log('\nFull results (index | status | duration | eventId):');
+  _log('\nFull results (index | status | duration | eventId):');
   results
     .sort((a, b) => a.index - b.index)
     .forEach((r) => {
       const mark = r.ok ? 'v' : 'x';
-      console.log(`  ${mark} [${String(r.index).padStart(3)}] ${r.status} | ${String(r.duration).padStart(4)}ms | ${r.eventId}`);
+      _log(`  ${mark} [${String(r.index).padStart(3)}] ${r.status} | ${String(r.duration).padStart(4)}ms | ${r.eventId}`);
     });
 
   // Return accepted eventIds for the optional end-to-end verification phase.
@@ -273,14 +287,14 @@ function fetchEventStatus(eventId) {
 
 async function verifyEndToEnd(eventIds) {
   if (!API_KEY) {
-    console.log('\nSkipping end-to-end verification: API_KEY is not set.');
-    console.log('Set API_KEY alongside WEBHOOK_SECRET to enable --verify.\n');
+    _log('\nSkipping end-to-end verification: API_KEY is not set.');
+    _log('Set API_KEY alongside WEBHOOK_SECRET to enable --verify.\n');
     return;
   }
 
-  console.log(`\n───────────────────────────────────────────`);
-  console.log(`  END-TO-END VERIFICATION (polling ${eventIds.length} events)`);
-  console.log(`───────────────────────────────────────────\n`);
+  _log(`\n───────────────────────────────────────────`);
+  _log(`  END-TO-END VERIFICATION (polling ${eventIds.length} events)`);
+  _log(`───────────────────────────────────────────\n`);
 
   const pending = new Set(eventIds);
   const finalStates = new Map();
@@ -299,7 +313,7 @@ async function verifyEndToEnd(eventIds) {
 
     if (pending.size > 0) {
       const elapsed = Math.round((Date.now() - startTime) / 1000);
-      console.log(`  [${elapsed}s] ${finalStates.size}/${eventIds.length} terminal — ${pending.size} still processing...`);
+      _log(`  [${elapsed}s] ${finalStates.size}/${eventIds.length} terminal — ${pending.size} still processing...`);
       await new Promise((resolve) => setTimeout(resolve, POLL_INTERVAL_MS));
     }
   }
@@ -315,24 +329,24 @@ async function verifyEndToEnd(eventIds) {
   const timedOut = [...finalStates.values()].filter((s) => s === 'timeout').length;
   const elapsed = Math.round((Date.now() - startTime) / 1000);
 
-  console.log(`\n═══════════════════════════════════════════`);
-  console.log(`       END-TO-END RESULTS (${elapsed}s)         `);
-  console.log(`═══════════════════════════════════════════`);
-  console.log(`  Completed       : ${completed}`);
-  console.log(`  Dead-lettered   : ${deadLettered}`);
-  console.log(`  Timed out       : ${timedOut}`);
-  console.log(`  Total processed : ${completed + deadLettered}/${eventIds.length}`);
-  console.log(`═══════════════════════════════════════════`);
+  _log(`\n═══════════════════════════════════════════`);
+  _log(`       END-TO-END RESULTS (${elapsed}s)         `);
+  _log(`═══════════════════════════════════════════`);
+  _log(`  Completed       : ${completed}`);
+  _log(`  Dead-lettered   : ${deadLettered}`);
+  _log(`  Timed out       : ${timedOut}`);
+  _log(`  Total processed : ${completed + deadLettered}/${eventIds.length}`);
+  _log(`═══════════════════════════════════════════`);
 
   if (timedOut > 0) {
-    console.log('\nTIMED-OUT EVENTS (still processing after 60s):');
+    _log('\nTIMED-OUT EVENTS (still processing after 60s):');
     for (const [id, status] of finalStates) {
-      if (status === 'timeout') console.log(`  ${id}`);
+      if (status === 'timeout') _log(`  ${id}`);
     }
   }
 
   if (completed + deadLettered === eventIds.length) {
-    console.log('\nALL EVENTS REACHED TERMINAL STATE — PIPELINE VERIFIED ✔');
+    _log('\nALL EVENTS REACHED TERMINAL STATE — PIPELINE VERIFIED ✔');
   }
 }
 

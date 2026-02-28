@@ -7,8 +7,6 @@ export enum EventStatus {
   PENDING = 'pending',
   PROCESSING = 'processing',
   COMPLETED = 'completed',
-  /** @deprecated Kept for backwards-compatibility with existing documents. Do not write. */
-  FAILED = 'failed',
   DEAD_LETTERED = 'dead_lettered',
 }
 
